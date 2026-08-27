@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 import joblib
+from datetime import datetime
 
 st.set_page_config(page_title="NAV Impact & Frontrunning Risk Predictor", layout="wide")
 
@@ -66,26 +67,13 @@ def predict_impact_formula(trade_value_rupees, stock_price, avg_daily_volume, vo
     trade_shares = trade_value_rupees / stock_price
     participation_rate = trade_shares / avg_daily_volume
     impact_pct = k * volatility * np.sqrt(participation_rate)
-    return impact_pct * 100
-
-def predict_impact_ml(trade_value_rupees, stock_price, avg_daily_volume, volatility):
-    trade_shares = trade_value_rupees / stock_price
-    participation_rate = trade_shares / avg_daily_volume
-    X = pd.DataFrame({
-        "trade_value": [trade_value_rupees],
-        "price": [stock_price],
-        "avg_volume": [avg_daily_volume],
-        "volatility": [volatility],
-        "participation_rate": [participation_rate]
-    })
-    return ml_model.predict(X)[0]
+    return impact_pct * 100, participation_rate
 
 live_results = []
 for _, row in liquidity_df.iterrows():
     ticker = row["ticker"]
     price = test_prices[ticker]
-    impact_formula = predict_impact_formula(trade_size, price, row["avg_daily_volume"], row["daily_volatility"])
-    impact_ml = predict_impact_ml(trade_size, price, row["avg_daily_volume"], row["daily_volatility"])
+    impact_formula, participation_rate = predict_impact_formula(trade_size, price, row["avg_daily_volume"], row["daily_volatility"])
     risk_score = impact_formula * (1 + combined_trend_score) * (1 + vol_score * 10)
     if risk_score > 0.5:
         level = "HIGH"
@@ -95,8 +83,8 @@ for _, row in liquidity_df.iterrows():
         level = "LOW"
     live_results.append({
         "Stock": ticker.replace(".NS", ""),
-        "Formula Impact (%)": round(impact_formula, 4),
-        "ML Model Impact (%)": round(impact_ml, 4),
+        "Predicted Impact (%)": round(impact_formula, 4),
+        "Participation Rate (%)": round(participation_rate * 100, 3),
         "Risk Score": round(risk_score, 4),
         "Compliance Flag": level
     })
@@ -104,7 +92,6 @@ for _, row in liquidity_df.iterrows():
 live_df = pd.DataFrame(live_results).sort_values("Risk Score", ascending=False).reset_index(drop=True)
 
 st.subheader(f"Frontrunning Risk Alert — Rs {trade_cr} Crore Trade")
-st.caption("Comparing formula-based (Almgren-Chriss) vs machine learning (Random Forest) predictions side by side")
 
 def color_flag(val):
     if val == "HIGH":
@@ -118,42 +105,59 @@ styled = live_df.style.map(color_flag, subset=["Compliance Flag"])
 st.dataframe(styled, use_container_width=True, hide_index=True)
 
 top_risk = live_df.iloc[0]
-if top_risk["Compliance Flag"] == "HIGH":
-    st.warning(f"ALERT: Trading {top_risk['Stock']} at this size carries HIGH frontrunning risk. Recommend splitting into smaller tranches over multiple sessions.")
 
 st.markdown("---")
-st.subheader("Model Comparison: Formula vs Machine Learning")
+st.subheader(f"Why is {top_risk['Stock']} flagged {top_risk['Compliance Flag']}?")
 
-with st.expander("How our ML model was trained", expanded=False):
-    st.markdown("""
-    We trained a Random Forest Regressor on 5,000 simulated trade scenarios using the Almgren-Chriss formula
-    as ground truth (with realistic noise added), then let the model learn the relationship independently.
+explain_col1, explain_col2 = st.columns([2, 1])
 
-    **Result:** R-squared = 0.994, Mean Absolute Error = 0.014%
+with explain_col1:
+    reasons = []
+    if top_risk["Participation Rate (%)"] > 1:
+        reasons.append(f"This trade represents **{top_risk['Participation Rate (%)']:.2f}%** of the stock's average daily trading volume, a significant share that alone drives most of the predicted price impact.")
+    else:
+        reasons.append(f"This trade represents a modest **{top_risk['Participation Rate (%)']:.2f}%** of average daily volume.")
 
-    **Key finding:** The model independently discovered that **participation rate** (trade size relative to
-    average daily volume) explains ~81%% of impact, and **volatility** explains ~19%%, together over 99%% of
-    the prediction. This validates the core insight of market microstructure theory: it's the *relative* size
-    of a trade, not its absolute size, that drives price impact.
-    """)
+    if agreement == 3:
+        reasons.append("All three redemption pressure timeframes (5-day, 10-day, 30-day) are currently negative, indicating the fund may be under sustained selling pressure, amplifying the risk of this trade needing to happen at an inopportune time.")
+    elif agreement >= 1:
+        reasons.append(f"{agreement} of 3 redemption pressure signals are negative, indicating partial selling pressure on the fund.")
+    else:
+        reasons.append("Redemption pressure signals are currently normal, so this risk is driven mainly by trade size and liquidity, not fund stress.")
 
-feat_col1, feat_col2 = st.columns(2)
-with feat_col1:
-    st.markdown("**Feature Importance (ML Model)**")
-    feat_df = pd.DataFrame({
-        "Feature": ["Participation Rate", "Volatility", "Trade Value", "Avg Volume", "Price"],
-        "Importance": [0.8088, 0.1867, 0.0019, 0.0014, 0.0012]
-    })
-    st.bar_chart(feat_df.set_index("Feature"))
+    if vol_score > 0.01:
+        reasons.append(f"Current 10-day volatility ({vol_score*100:.3f}%) is elevated, meaning price moves are larger and less predictable right now, compounding the impact risk.")
 
-with feat_col2:
-    st.markdown("**Why we use both models together**")
-    st.markdown("""
-    - **Formula (Almgren-Chriss):** Explainable, grounded in finance theory, works even with limited data
-    - **ML Model:** Can capture non-linear patterns and interactions a fixed formula might miss, given enough real trade data
-    - **In production:** the formula provides a transparent baseline for regulators; the ML model could be retrained
-      on real historical trade data as it becomes available, improving accuracy over time
-    """)
+    for i, r in enumerate(reasons, 1):
+        st.markdown(f"{i}. {r}")
+
+    st.markdown(f"**Recommendation:** " + (
+        "Split this trade into smaller tranches across multiple sessions, and consider using algorithmic execution (e.g., VWAP/TWAP strategies) to minimize market impact and reduce frontrunning exposure."
+        if top_risk["Compliance Flag"] == "HIGH" else
+        "Standard execution should be acceptable, but monitor redemption trends before proceeding."
+    ))
+
+with explain_col2:
+    st.metric("Risk Score", f"{top_risk['Risk Score']:.4f}")
+    st.metric("Predicted Impact", f"{top_risk['Predicted Impact (%)']:.4f}%")
+    st.metric("Participation Rate", f"{top_risk['Participation Rate (%)']:.3f}%")
+
+st.markdown("---")
+st.subheader("Export Compliance Report")
+
+report_df = live_df.copy()
+report_df["Fund"] = "HDFC Large Cap Fund - Direct Growth"
+report_df["Trade Size (Rs Crore)"] = trade_cr
+report_df["Report Generated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+report_df["Redemption Pressure (3-Signal Agreement)"] = f"{agreement}/3"
+
+csv_data = report_df.to_csv(index=False)
+st.download_button(
+    label="Download Compliance Report (CSV)",
+    data=csv_data,
+    file_name=f"frontrunning_risk_report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+    mime="text/csv"
+)
 
 st.markdown("---")
 st.subheader("Model Validation: Historical Backtest")
@@ -183,31 +187,6 @@ with tab2:
     disp2["Actual Next 5-Day Return"] = (disp2["Actual Next 5-Day Return"] * 100).round(2).astype(str) + "%"
     st.dataframe(disp2, use_container_width=True, hide_index=True)
     st.info("Adding faster 5-day and 10-day signals improved detection of recent, sharper drops. Some sudden shocks remain inherently hard to predict, a realistic limitation.")
-
-st.markdown("---")
-st.subheader("How This Works")
-
-with st.expander("NAV Impact Model (Almgren-Chriss + ML)"):
-    st.markdown("""
-    Predicted price impact scales with the square root of participation rate, scaled by volatility.
-    We validate this formula-based model against a Random Forest ML model trained to learn the same
-    relationship independently, both agree closely, and the ML model's feature importance confirms
-    the theory.
-
-    Formula: Impact % = k x volatility x sqrt(trade size / average daily volume)
-    """)
-
-with st.expander("Multi-Timeframe Redemption Pressure Signal"):
-    st.markdown("""
-    Combines 5-day, 10-day, and 30-day rolling NAV return trends to catch both sudden shocks and
-    sustained stress. Validated against 10+ years of real historical data including the 2020 COVID crash.
-    """)
-
-with st.expander("Why This Matters for Compliance"):
-    st.markdown("""
-    SEBI actively monitors frontrunning. This tool gives AMC compliance teams an early, explainable,
-    quantified signal of which upcoming trades carry the highest distortion and frontrunning risk.
-    """)
 
 st.markdown("---")
 st.caption("Data: AMFI (via mftool), NSE (via yfinance) | Models: Almgren-Chriss formula + Random Forest ML, validated via historical backtest | Built with Python & Streamlit")
