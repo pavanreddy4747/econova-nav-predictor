@@ -1,5 +1,5 @@
-ticker,predicted_impact_pct,redemption_trend_risk,final_risk_score
-LT.NS,0.1253,1,0.2006
-INFY.NS,0.0964,1,0.1543
-RELIANCE.NS,0.0674,1,0.108
-ICICIBANK.NS,0.0662,1,0.1059
+ticker,predicted_impact_pct,combined_trend_score,final_risk_score
+LT.NS,0.1253,1.0,0.257
+INFY.NS,0.0964,1.0,0.1977
+RELIANCE.NS,0.0674,1.0,0.1384
+ICICIBANK.NS,0.0662,1.0,0.1357

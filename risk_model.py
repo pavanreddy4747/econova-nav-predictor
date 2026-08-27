@@ -3,8 +3,18 @@ import numpy as np
 
 nav_df = pd.read_csv("nav_with_trends.csv")
 latest = nav_df.iloc[-1]
-trend_score = 1 if latest["rolling_avg_return_30d"] < 0 else 0
-vol_score = latest["rolling_volatility_30d"]
+
+fast_signal = 1 if latest["rolling_avg_return_5d"] < 0 else 0
+medium_signal = 1 if latest["rolling_avg_return_10d"] < 0 else 0
+slow_signal = 1 if latest["rolling_avg_return_30d"] < 0 else 0
+
+combined_trend_score = (fast_signal * 0.5) + (medium_signal * 0.3) + (slow_signal * 0.2)
+vol_score = latest["rolling_volatility_10d"]
+
+print(f"Fast (5d) signal negative: {bool(fast_signal)}")
+print(f"Medium (10d) signal negative: {bool(medium_signal)}")
+print(f"Slow (30d) signal negative: {bool(slow_signal)}")
+print(f"Combined trend score: {combined_trend_score:.3f}")
 
 stats_df = pd.read_csv("liquidity_stats.csv")
 
@@ -22,8 +32,8 @@ for _, row in stats_df.iterrows():
     ticker = row["ticker"]
     price = test_prices[ticker]
     impact = predict_impact(trade_size, price, row["avg_daily_volume"], row["daily_volatility"])
-    risk_score = impact * (1 + trend_score * 0.5) * (1 + vol_score * 10)
-    results.append({"ticker": ticker, "predicted_impact_pct": round(impact, 4), "redemption_trend_risk": trend_score, "final_risk_score": round(risk_score, 4)})
+    risk_score = impact * (1 + combined_trend_score) * (1 + vol_score * 10)
+    results.append({"ticker": ticker, "predicted_impact_pct": round(impact, 4), "combined_trend_score": round(combined_trend_score, 3), "final_risk_score": round(risk_score, 4)})
 
 risk_df = pd.DataFrame(results).sort_values("final_risk_score", ascending=False)
 print(risk_df)
