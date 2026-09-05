@@ -1,0 +1,3 @@
+period,hit_rate,n_worst_days_tested
+train (in-sample),0.4698275862068966,232
+test (out-of-sample),0.45454545454545453,99
